@@ -6,6 +6,8 @@
  * Modified by Murilo FM (muhrix@gmail.com)
  * 12 Dec 2013
  *
+ * Modified by kkonen@techfak.uni-bielefeld.de
+ * 22 Nov 2018
  */
 
 #include <speak_lib.h>
@@ -13,9 +15,16 @@
 #include <std_msgs/String.h>
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
-
+#include <pal_interaction_msgs/TtsAction.h>
+#include <actionlib/server/simple_action_server.h>
 #include <dynamic_reconfigure/server.h>
 #include <espeak_ros/EspeakConfig.h>
+
+
+
+#include <unistd.h>
+
+
 
 boost::mutex mtx;
 
@@ -24,16 +33,53 @@ std::string getDialectName(int d);
 
 void dyn_cfg_callback(espeak_ros::EspeakConfig &cfg, uint32_t level);
 
-void espeak_callback(const std_msgs::String::ConstPtr& line) {
-	// lock mutex before calling espeak functions
-	boost::mutex::scoped_lock u_lock(mtx);
-    /* Speak the string */
-	ROS_INFO("%s", line->data.c_str());
-    espeak_Synth(line->data.c_str(), line->data.length()+1, 0, POS_CHARACTER, 0, 
-        espeakCHARS_AUTO | espeakPHONEMES | espeakENDPAUSE, NULL, NULL);
-    espeak_Synchronize();
-    //ROS_INFO("Speaking: \"%s\"", line->data.c_str());
-}
+class TtsAction
+{
+protected:
+
+    actionlib::SimpleActionServer<pal_interaction_msgs::TtsAction> as_;
+    std::string action_name_;
+    pal_interaction_msgs::TtsFeedback feedback_;
+    pal_interaction_msgs::TtsResult result_;
+
+public:
+
+    TtsAction(ros::NodeHandle n) :
+    as_(n, "/tts", boost::bind(&TtsAction::executeCB, this, _1), false)
+    {
+        as_.start();
+    }
+
+    ~TtsAction(void)
+    {
+    }
+
+    void executeCB(const pal_interaction_msgs::TtsGoalConstPtr &goal)
+    {
+        bool success = true;
+        boost::mutex::scoped_lock u_lock(mtx);
+        ROS_INFO("%s", goal->rawtext.text.c_str());
+        espeak_Synth(goal->rawtext.text.c_str(), goal->rawtext.text.length()+1, 0, POS_CHARACTER, 0,
+            espeakCHARS_AUTO | espeakPHONEMES | espeakENDPAUSE, NULL, NULL);
+
+        while(espeak_IsPlaying()) {
+
+            if(as_.isPreemptRequested()) {
+                espeak_Cancel();
+                feedback_.text_said = "Tts canceled";
+                as_.publishFeedback(feedback_);
+                success = false;
+                break;
+            }
+        }
+
+        if(success) {
+            result_.text = goal->rawtext.text.c_str();
+            as_.setSucceeded(result_);
+        }
+    }
+};
+
 
 int main( int argc, char** argv ) {
 	espeak_Initialize(AUDIO_OUTPUT_PLAYBACK, 0, NULL, 0);
@@ -192,7 +238,7 @@ int main( int argc, char** argv ) {
     f = boost::bind(&dyn_cfg_callback, _1, _2);
     server.setCallback(f);
 
-    ros::Subscriber sub = n.subscribe("/espeak_node/speak_line", 20, espeak_callback);
+    TtsAction tts(n);
 
     ros::spin();
     while (n.ok());
