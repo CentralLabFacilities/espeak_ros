@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
     
+  <param name="/tts/actionlib_status_frequency" value="0.0" /> <!-- frequency at which status of action server is published on topic -->
   <node name="espeak_node" pkg="espeak_ros" type="espeak_node" respawn="false" output="screen">
         
         <param name="voice" value="1" />
